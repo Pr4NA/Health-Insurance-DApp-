@@ -1,0 +1,39 @@
+{
+  "language": "Solidity",
+  "sources": {
+    "contracts/Insurance.sol": {
+      "content": "// SPDX-License-Identifier: MIT\r\npragma solidity ^0.8.0;\r\n\r\ncontract Insurance {\r\n    address public owner;\r\n    uint256 public premiumAmount; // monthly premium in wei\r\n    uint256 public policyBuyAmount; //to buy policy\r\n    uint256 public constant MONTH = 30 days;\r\n\r\n    struct Policy {\r\n        bool active;\r\n        uint256 nextDue;\r\n    }\r\n\r\n    struct Claim {\r\n        uint256 id;\r\n        address claimant;\r\n        address doctor; // doctor the claimant requested\r\n        uint256 amount; // requested payout in wei\r\n        bool approved;\r\n        bool paid;\r\n    }\r\n\r\n    // state\r\n    mapping(address => Policy) public policies;\r\n    mapping(address => bool) public authorisedDoctor;\r\n    mapping(uint256 => Claim) public claims;\r\n    uint256 public nextClaimId;\r\n\r\n    // events\r\n    event PolicyBought(address indexed who, uint256 nextDue);\r\n    event PremiumPaid(address indexed who, uint256 nextDue);\r\n    event PolicyCancelled(address indexed who, uint256 when);\r\n    event ClaimSubmitted(\r\n        uint256 indexed id,\r\n        address indexed claimant,\r\n        address indexed doctor,\r\n        uint256 amount\r\n    );\r\n    event ClaimApproved(\r\n        uint256 indexed id,\r\n        address indexed doctor,\r\n        uint256 amount\r\n    );\r\n    event Withdraw(address indexed by, uint256 amount);\r\n    event DoctorAdded(address indexed doctor);\r\n    event DoctorRemoved(address indexed doctor);\r\n\r\n    modifier onlyOwner() {\r\n        require(msg.sender == owner, \"Only owner\");\r\n        _;\r\n    }\r\n\r\n    modifier onlyAuthorisedDoctor() {\r\n        require(authorisedDoctor[msg.sender], \"Not an authorised doctor\");\r\n        _;\r\n    }\r\n\r\n    constructor(\r\n        uint256 _premiumAmountWei,\r\n        uint256 _policyBuyAmount,\r\n        address[] memory initialDoctors\r\n    ) {\r\n        owner = msg.sender;\r\n        premiumAmount = _premiumAmountWei;\r\n        policyBuyAmount = _policyBuyAmount;\r\n        for (uint i = 0; i < initialDoctors.length; i++) {\r\n            authorisedDoctor[initialDoctors[i]] = true;\r\n            emit DoctorAdded(initialDoctors[i]);\r\n        }\r\n    }\r\n\r\n    function buyPolicy() external payable {\r\n        require(!policies[msg.sender].active, \"Policy already active\");\r\n        require(msg.value == policyBuyAmount, \"Send exact amount\");\r\n\r\n        // activate policy\r\n        policies[msg.sender].active = true;\r\n        policies[msg.sender].nextDue = block.timestamp + MONTH;\r\n\r\n        emit PolicyBought(msg.sender, policies[msg.sender].nextDue);\r\n    }\r\n\r\n    function payPremium() external payable {\r\n        Policy storage p = policies[msg.sender];\r\n        require(p.active, \"No active policy\");\r\n        require(block.timestamp <= p.nextDue, \"Policy expired - cancelled\");\r\n        require(msg.value == premiumAmount, \"Send exact premium\");\r\n\r\n        // extend nextDue by one month\r\n        p.nextDue = p.nextDue + MONTH;\r\n\r\n        emit PremiumPaid(msg.sender, p.nextDue);\r\n    }\r\n\r\n    function enforceCancellation(address user) public {\r\n        Policy storage p = policies[user];\r\n        if (p.active && block.timestamp > p.nextDue) {\r\n            p.active = false;\r\n            emit PolicyCancelled(user, block.timestamp);\r\n        }\r\n    }\r\n\r\n    function submitClaim(\r\n        address doctor,\r\n        uint256 amountWei\r\n    ) external returns (uint256) {\r\n        // auto-cancel if overdue\r\n        enforceCancellation(msg.sender);\r\n\r\n        Policy storage p = policies[msg.sender];\r\n        require(p.active, \"Policy not active\");\r\n        require(block.timestamp <= p.nextDue, \"Policy expired\");\r\n\r\n        require(authorisedDoctor[doctor], \"Doctor not authorised\");\r\n\r\n        uint256 id = nextClaimId++;\r\n        claims[id] = Claim({\r\n            id: id,\r\n            claimant: msg.sender,\r\n            doctor: doctor,\r\n            amount: amountWei,\r\n            approved: false,\r\n            paid: false\r\n        });\r\n\r\n        emit ClaimSubmitted(id, msg.sender, doctor, amountWei);\r\n        return id;\r\n    }\r\n\r\n    function approveClaim(uint256 claimId) external onlyAuthorisedDoctor {\r\n        Claim storage c = claims[claimId];\r\n        require(c.claimant != address(0), \"Invalid claim\");\r\n        require(!c.approved, \"Already approved\");\r\n        require(!c.paid, \"Already paid\");\r\n        require(c.doctor == msg.sender, \"Doctor not assigned to this claim\");\r\n\r\n        uint256 toPay = c.amount;\r\n        require(\r\n            address(this).balance >= toPay,\r\n            \"Insufficient contract balance\"\r\n        );\r\n\r\n        // mark approved & paid then transfer (prevent reentrancy)\r\n        c.approved = true;\r\n        c.paid = true;\r\n\r\n        // transfer\r\n        (bool sent, ) = c.claimant.call{value: toPay}(\"\");\r\n        require(sent, \"Transfer failed\");\r\n\r\n        emit ClaimApproved(claimId, msg.sender, toPay);\r\n    }\r\n\r\n    function withdraw(uint256 amountWei) external onlyOwner {\r\n        require(address(this).balance >= amountWei, \"Insufficient balance\");\r\n        (bool sent, ) = owner.call{value: amountWei}(\"\");\r\n        require(sent, \"Withdraw failed\");\r\n        emit Withdraw(msg.sender, amountWei);\r\n    }\r\n\r\n    function addDoctor(address doctor) external onlyOwner {\r\n        authorisedDoctor[doctor] = true;\r\n        emit DoctorAdded(doctor);\r\n    }\r\n\r\n    function removeDoctor(address doctor) external onlyOwner {\r\n        authorisedDoctor[doctor] = false;\r\n        emit DoctorRemoved(doctor);\r\n    }\r\n\r\n    function isPolicyActiveView(address user) external view returns (bool) {\r\n        Policy storage p = policies[user];\r\n        return (p.active && block.timestamp <= p.nextDue);\r\n    }\r\n\r\n    receive() external payable {}\r\n}\r\n"
+    },
+    "contracts/Lock.sol": {
+      "content": "// SPDX-License-Identifier: UNLICENSED\npragma solidity ^0.8.28;\n\n// Uncomment this line to use console.log\n// import \"hardhat/console.sol\";\n\ncontract Lock {\n  uint public unlockTime;\n  address payable public owner;\n\n  event Withdrawal(uint amount, uint when);\n\n  constructor(uint _unlockTime) payable {\n    require(\n      block.timestamp < _unlockTime,\n      \"Unlock time should be in the future\"\n    );\n\n    unlockTime = _unlockTime;\n    owner = payable(msg.sender);\n  }\n\n  function withdraw() public {\n    // Uncomment this line, and the import of \"hardhat/console.sol\", to print a log in your terminal\n    // console.log(\"Unlock time is %o and block timestamp is %o\", unlockTime, block.timestamp);\n\n    require(block.timestamp >= unlockTime, \"You can't withdraw yet\");\n    require(msg.sender == owner, \"You aren't the owner\");\n\n    emit Withdrawal(address(this).balance, block.timestamp);\n\n    owner.transfer(address(this).balance);\n  }\n}\n"
+    }
+  },
+  "settings": {
+    "evmVersion": "paris",
+    "optimizer": {
+      "enabled": false,
+      "runs": 200
+    },
+    "outputSelection": {
+      "*": {
+        "*": [
+          "abi",
+          "evm.bytecode",
+          "evm.deployedBytecode",
+          "evm.methodIdentifiers",
+          "metadata",
+          "devdoc",
+          "userdoc",
+          "storageLayout",
+          "evm.gasEstimates"
+        ],
+        "": [
+          "ast"
+        ]
+      }
+    },
+    "metadata": {
+      "useLiteralContent": true
+    }
+  }
+}
