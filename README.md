@@ -1,13 +1,3 @@
-# Sample Hardhat Project
+# Health Insurrance DApp
 
-This project demonstrates a basic Hardhat use case. It comes with a sample contract, a test for that contract, and a Hardhat Ignition module that deploys that contract.
-
-Try running some of the following tasks:
-
-```shell
-npx hardhat help
-npx hardhat test
-REPORT_GAS=true npx hardhat test
-npx hardhat node
-npx hardhat ignition deploy ./ignition/modules/Lock.js
-```
+A blockchain-based health insurance system where users can buy policies, pay monthly premiums, and submit claims — all fully on-chain. Claims are verified by authorized doctors, and payouts are automatically released by the smart contract. The system is transparent, tamper-proof, and removes the need for traditional intermediaries. Built using Solidity, Hardhat.
